@@ -20,6 +20,10 @@
   - 在开发者后台创建应用，开通权限：`im:message:send_as_bot`、`im:image:upload`；发布版本。
   - 事件订阅启用并勾选：`im.message.receive_v1`。
 
+- 前置准备（企业微信后台）：
+  - 创建企业微信“自建应用”，记录 `CorpID`、`CorpSecret`、`AgentID`。
+  - 在“接收消息服务器配置”中，开发阶段可先用 GET `echostr` 校验通过（生产需启用加密并校验签名/解密）。
+
 - 启动服务：
   1) 设置环境变量（在同一终端执行）：
      ```bash
@@ -41,6 +45,20 @@
   5) 在飞书中与应用对话发送：
      - 示例：“给张先生发个生日祝福”
      - 示例：“王先生的儿子考上了清华大学”
+
+- 企业微信开发联调（简化模式）
+  - 额外设置环境变量：
+    ```bash
+    export WECOM_CORP_ID="wwxxxxxxxxxxxx"
+    export WECOM_CORP_SECRET="xxxxxxxxxxxxxxxxxxxxxxxx"
+    export WECOM_AGENT_ID="1000002"
+    # 开启安全模式（回调验签与加解密）需要：
+    export WECOM_TOKEN="your_token_here"
+    export WECOM_ENCODING_AES_KEY="your_43_chars_encodingaeskey"
+    ```
+  - 在企业微信“接收消息”配置公网地址指向：`https://<你的域名>.loca.lt/wecom/event`
+  - 安全模式下，系统会使用 token 与 encodingaeskey 对 URL 验证（GET echostr）进行验签与解密；生产建议开启。
+  - 发送“王先生的儿子考上了清华大学”等消息，机器人将先回“客户画像”文本，再回图片。
 
 - 本地快速验证（不依赖飞书）：
   ```bash
@@ -78,6 +96,12 @@
 - Node.js（可选，用于内网穿透）
   - localtunnel（`npm i -g localtunnel`）
 - 可选：DeepSeek（或兼容 OpenAI 接口的模型），通过 `DEEPSEEK_API_KEY` 启用；未设置将使用 Mock。
+- 企业微信接口：需要 `WECOM_CORP_ID`、`WECOM_CORP_SECRET`、`WECOM_AGENT_ID`
+  - 安全模式（推荐）：`WECOM_TOKEN`、`WECOM_ENCODING_AES_KEY`（43 位）
+  - 依赖：`pycryptodome`（AES-CBC 解密）
+    ```bash
+    pip install pycryptodome
+    ```
 
 ## 5. 安装方式
 
@@ -107,6 +131,8 @@ lt --port 8080
 ```
 在飞书后台配置 `https://<你的域名>.loca.lt/webhook/event` 并验证，通过后即可以与机器人对话完成“画像 + 贺卡”闭环。
 
+若需企业微信联调，在后台将 `https://<你的域名>.loca.lt/wecom/event` 配置为接收地址（开发阶段直通 JSON，生产环境需启用加解密流程）。
+
 ---
 
 ### 目录结构（简要）
@@ -126,4 +152,3 @@ iceman/
 
 - “没有响应”：确认 localtunnel 正在运行、飞书事件订阅地址指向 `/webhook/event` 且验证通过；确认应用已加入当前会话并发布了权限变更；群聊中请 @ 应用。
 - “重复回复”：代码已加入 message_id 去重；如仍出现，请截图日志中的 `message_id` 并反馈。
-

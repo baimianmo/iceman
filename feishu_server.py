@@ -3,6 +3,18 @@ import requests
 import json
 import logging
 from collections import deque
+import time
+import base64
+import hashlib
+import struct
+from typing import Tuple
+import xml.etree.ElementTree as ET
+
+try:
+    # 需要 pycryptodome
+    from Crypto.Cipher import AES
+except Exception:
+    AES = None
 from flask import Flask, request, jsonify
 
 # 配置日志
@@ -319,6 +331,285 @@ def feishu_event_handler():
 
 import subprocess
 import time
+
+class WeComService:
+    def __init__(self):
+        self.corp_id = os.getenv("WECOM_CORP_ID") or ""
+        self.corp_secret = os.getenv("WECOM_CORP_SECRET") or ""
+        self.agent_id = os.getenv("WECOM_AGENT_ID") or ""
+        self.access_token = ""
+        self.token_ts = 0
+        if self.corp_id and self.corp_secret:
+            logger.info("企业微信配置已加载")
+
+    def get_access_token(self):
+        # 每次尝试前动态补全环境变量，避免运行中修改环境后实例未刷新
+        if not self.corp_id:
+            self.corp_id = os.getenv("WECOM_CORP_ID") or ""
+        if not self.corp_secret:
+            self.corp_secret = os.getenv("WECOM_CORP_SECRET") or ""
+        if not self.agent_id:
+            self.agent_id = os.getenv("WECOM_AGENT_ID") or ""
+        if not self.corp_id or not self.corp_secret:
+            missing = []
+            if not self.corp_id:
+                missing.append("WECOM_CORP_ID")
+            if not self.corp_secret:
+                missing.append("WECOM_CORP_SECRET")
+            logger.error(f"获取企业微信 access_token 失败：缺少环境变量 {', '.join(missing)}")
+            return None
+        try:
+            logger.info(f"WeCom gettoken corp_id={self.corp_id[:3]}*** agent_id={self.agent_id} secret_len={len(self.corp_secret)}")
+        except Exception:
+            pass
+        if self.access_token and time.time() - self.token_ts < 7000:
+            return self.access_token
+        url = "https://qyapi.weixin.qq.com/cgi-bin/gettoken"
+        try:
+            r = requests.get(url, params={"corpid": self.corp_id, "corpsecret": self.corp_secret})
+            data = r.json()
+            if data.get("errcode") == 0:
+                self.access_token = data.get("access_token")
+                self.token_ts = time.time()
+                return self.access_token
+            else:
+                logger.error(f"获取企业微信 access_token 失败: {data}")
+        except Exception as e:
+            logger.error(f"获取企业微信 access_token 异常: {e}")
+        return None
+
+    def send_text(self, to_user, content):
+        if not self.get_access_token():
+            return None
+        url = "https://qyapi.weixin.qq.com/cgi-bin/message/send"
+        payload = {
+            "touser": to_user,
+            "msgtype": "text",
+            "agentid": int(self.agent_id) if self.agent_id.isdigit() else self.agent_id,
+            "text": {"content": content},
+            "duplicate_check_interval": 1800
+        }
+        try:
+            resp = requests.post(url, params={"access_token": self.access_token}, json=payload).json()
+            if resp.get("errcode") != 0:
+                logger.error(f"企业微信发送文本失败: {resp}")
+            return resp
+        except Exception as e:
+            logger.error(f"企业微信发送文本异常: {e}")
+            return None
+
+    def send_textcard(self, to_user, title, description, url_link=""):
+        if not self.get_access_token():
+            return None
+        url = "https://qyapi.weixin.qq.com/cgi-bin/message/send"
+        payload = {
+            "touser": to_user,
+            "msgtype": "textcard",
+            "agentid": int(self.agent_id) if self.agent_id.isdigit() else self.agent_id,
+            "textcard": {
+                "title": title,
+                "description": description,
+                "url": url_link or "https://work.weixin.qq.com/",
+                "btntxt": "查看"
+            },
+            "duplicate_check_interval": 1800
+        }
+        try:
+            resp = requests.post(url, params={"access_token": self.access_token}, json=payload).json()
+            if resp.get("errcode") != 0:
+                logger.error(f"企业微信发送文本卡片失败: {resp}")
+            return resp
+        except Exception as e:
+            logger.error(f"企业微信发送文本卡片异常: {e}")
+            return None
+
+    def upload_image(self, image_path):
+        if not self.get_access_token():
+            return None
+        url = "https://qyapi.weixin.qq.com/cgi-bin/media/upload"
+        try:
+            if not os.path.exists(image_path):
+                logger.error(f"文件不存在: {image_path}")
+                return None
+            files = {"media": (os.path.basename(image_path), open(image_path, "rb"), "image/png")}
+            resp = requests.post(url, params={"access_token": self.access_token, "type": "image"}, files=files).json()
+            if resp.get("errcode") == 0:
+                return resp.get("media_id")
+            else:
+                logger.error(f"企业微信上传图片失败: {resp}")
+                return None
+        except Exception as e:
+            logger.error(f"企业微信上传图片异常: {e}")
+            return None
+
+    def send_image(self, to_user, media_id):
+        if not self.get_access_token():
+            return None
+        url = "https://qyapi.weixin.qq.com/cgi-bin/message/send"
+        payload = {
+            "touser": to_user,
+            "msgtype": "image",
+            "agentid": int(self.agent_id) if self.agent_id.isdigit() else self.agent_id,
+            "image": {"media_id": media_id},
+            "duplicate_check_interval": 1800
+        }
+        try:
+            resp = requests.post(url, params={"access_token": self.access_token}, json=payload).json()
+            if resp.get("errcode") != 0:
+                logger.error(f"企业微信发送图片失败: {resp}")
+            return resp
+        except Exception as e:
+            logger.error(f"企业微信发送图片异常: {e}")
+            return None
+
+wecom_service = WeComService()
+
+def handle_user_message_wecom(user_id, text):
+    logger.info(f"开始处理企业微信消息: {text}")
+    try:
+        from agents import main_agent
+        result = main_agent.run_and_return(text)
+        if result:
+            profile_data = result.get("profile")
+            blessing_text = result.get("blessing", "")
+            image_path = result.get("image_path")
+            if profile_data:
+                # 优先用文本卡片展示关键摘要，提升可读性与兼容性
+                summary = []
+                name = profile_data.get("name")
+                gender = profile_data.get("gender")
+                level = profile_data.get("level") or profile_data.get("membership_level")
+                assets = profile_data.get("assets") or profile_data.get("assets_level")
+                risk = profile_data.get("risk_preference")
+                hobbies = profile_data.get("hobbies") or profile_data.get("interests") or []
+                if name: summary.append(f"姓名：{name}")
+                if gender: summary.append(f"性别：{gender}")
+                if level: summary.append(f"等级：{level}")
+                if assets: summary.append(f"资产：{assets}")
+                if risk: summary.append(f"偏好：{risk}")
+                if hobbies: summary.append(f"爱好：{','.join(hobbies)}")
+                desc = "<br/>".join(summary) if summary else "暂无画像信息"
+                wecom_service.send_textcard(user_id, "客户画像", desc)
+                # 再按需发送完整 JSON（分片避免超长导致丢弃）
+                full_json = json.dumps(profile_data, ensure_ascii=False, indent=2)
+                max_len = 2048
+                for i in range(0, len(full_json), max_len):
+                    chunk = full_json[i:i+max_len]
+                    wecom_service.send_text(user_id, chunk)
+            if blessing_text and not image_path:
+                wecom_service.send_text(user_id, blessing_text)
+            if image_path:
+                media_id = wecom_service.upload_image(image_path)
+                if media_id:
+                    wecom_service.send_image(user_id, media_id)
+                else:
+                    wecom_service.send_text(user_id, "图片发送失败")
+        else:
+            wecom_service.send_text(user_id, "抱歉，我没有理解您的指令。")
+    except Exception as e:
+        logger.error(f"处理企业微信消息异常: {e}")
+        wecom_service.send_text(user_id, f"系统发生错误: {str(e)}")
+
+@app.route("/wecom/event", methods=["POST", "GET"])
+def wecom_event_handler():
+    if request.method == "GET":
+        # 企业微信 URL 验证（安全模式）
+        echostr = request.args.get("echostr", "")
+        msg_signature = request.args.get("msg_signature", "")
+        timestamp = request.args.get("timestamp", "")
+        nonce = request.args.get("nonce", "")
+        if echostr and msg_signature and timestamp and nonce:
+            token = os.getenv("WECOM_TOKEN", "")
+            encoding_aes_key = os.getenv("WECOM_ENCODING_AES_KEY", "")
+            corp_id = os.getenv("WECOM_CORP_ID", "")
+            # 验证签名
+            sig = hashlib.sha1("".join(sorted([token, timestamp, nonce, echostr])).encode("utf-8")).hexdigest()
+            if sig != msg_signature:
+                logger.error("企业微信 URL 验证签名失败")
+                return "signature error", 403
+            # 解密 echostr
+            if AES and encoding_aes_key:
+                try:
+                    plain, recv_id = _wecom_decrypt(encoding_aes_key, echostr)
+                    if corp_id and recv_id and corp_id != recv_id:
+                        logger.error("企业微信 URL 验证 corp_id 不匹配")
+                        return "corp id mismatch", 403
+                    return plain
+                except Exception as e:
+                    logger.error(f"企业微信 URL 验证解密失败: {e}")
+                    return "decrypt error", 500
+            else:
+                # 无加解密能力或未配置 encoding_aes_key，直接回显（仅明文模式可用）
+                return echostr
+        # 明文模式或健康检查
+        return "ok"
+    ctype = request.headers.get("Content-Type", "")
+    if "xml" in ctype or request.data.strip().startswith(b"<xml"):
+        try:
+            root = ET.fromstring(request.data)
+            enc = root.findtext("Encrypt")
+            token = os.getenv("WECOM_TOKEN", "")
+            encoding_aes_key = os.getenv("WECOM_ENCODING_AES_KEY", "")
+            msg_signature = request.args.get("msg_signature", "")
+            timestamp = request.args.get("timestamp", "")
+            nonce = request.args.get("nonce", "")
+            if enc:
+                sig = hashlib.sha1("".join(sorted([token, timestamp, nonce, enc])).encode("utf-8")).hexdigest()
+                if sig != msg_signature:
+                    return "signature error", 403
+                plain_xml, _ = _wecom_decrypt(encoding_aes_key, enc) if AES and encoding_aes_key else (None, None)
+                if not plain_xml:
+                    return "decrypt error", 500
+                xr = ET.fromstring(plain_xml)
+            else:
+                xr = root
+            user_id = xr.findtext("FromUserName") or ""
+            text = xr.findtext("Content") or ""
+            if user_id and text:
+                threading.Thread(target=handle_user_message_wecom, args=(user_id, text)).start()
+            return "success"
+        except Exception as e:
+            logger.error(f"企业微信 XML 解析失败: {e}")
+            return "parse error", 400
+    else:
+        data = request.get_json(silent=True) or {}
+        user_id = data.get("FromUserId") or data.get("from_user") or ""
+        text = data.get("Text") or data.get("text") or ""
+        if not user_id or not text:
+            return jsonify({"errcode": 0})
+        threading.Thread(target=handle_user_message_wecom, args=(user_id, text)).start()
+        return jsonify({"errcode": 0})
+
+@app.route("/wecom/diagnose", methods=["GET"])
+def wecom_diagnose():
+    ok = bool(wecom_service.get_access_token())
+    return jsonify({"ok": ok})
+
+
+def _pkcs7_unpad(data: bytes) -> bytes:
+    pad_len = data[-1]
+    if pad_len < 1 or pad_len > 32:
+        raise ValueError("invalid padding")
+    return data[:-pad_len]
+
+
+def _wecom_decrypt(encoding_aes_key: str, encrypt: str) -> Tuple[str, str]:
+    """
+    解密企业微信加密消息/echostr
+    返回: (明文字符串, receive_id)
+    """
+    aes_key = base64.b64decode(encoding_aes_key + "=")
+    iv = aes_key[:16]
+    cipher = AES.new(aes_key, AES.MODE_CBC, iv)
+    cipher_text = base64.b64decode(encrypt)
+    plain_padded = cipher.decrypt(cipher_text)
+    plain = _pkcs7_unpad(plain_padded)
+    # 结构: 16字节随机 + 4字节网络序长度 + 内容 + receive_id
+    content = plain[16:]
+    msg_len = struct.unpack(">I", content[:4])[0]
+    msg = content[4:4 + msg_len]
+    receive_id = content[4 + msg_len:].decode("utf-8", errors="ignore")
+    return msg.decode("utf-8"), receive_id
 
 if __name__ == "__main__":
     # macOS 上 5000 端口常被 AirPlay 占用，改用 8080 端口更安全
