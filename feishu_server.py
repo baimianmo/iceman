@@ -225,6 +225,13 @@ _processed_msg_ids_set = set()
 _processed_max = 300
 _cache_lock = threading.Lock()
 
+# 基于 chat_id + 文本内容 的二级去重，避免不同 message_id 的重复推送
+_recent_text_cache = {}
+_recent_text_ttl = int(os.getenv("FEISHU_DEDUP_SECONDS", "45"))
+
+# in-flight 并发去重：相同 chat_id+text 仅允许一个处理线程运行
+_inflight = set()
+
 def _already_processed(message_id: str) -> bool:
     if not message_id:
         return False
@@ -239,9 +246,34 @@ def _already_processed(message_id: str) -> bool:
         _processed_msg_ids_set.add(message_id)
         return False
 
+def _is_duplicate_content(chat_id: str, text: str) -> bool:
+    if not chat_id or not text:
+        return False
+    key = f"{chat_id}:{text.strip()}"
+    now = time.time()
+    with _cache_lock:
+        ts = _recent_text_cache.get(key)
+        # 清理过期项（惰性）
+        if ts and now - ts < _recent_text_ttl:
+            return True
+        _recent_text_cache[key] = now
+        # 轻量清理，防止无限增长
+        if len(_recent_text_cache) > 2000:
+            cutoff = now - _recent_text_ttl
+            for k, v in list(_recent_text_cache.items()):
+                if v < cutoff:
+                    _recent_text_cache.pop(k, None)
+    return False
+
 def handle_user_message(chat_id, text):
     """处理用户消息的核心逻辑 (运行在子线程中)"""
     logger.info(f"开始处理消息: {text}")
+    inflight_key = f"{chat_id}:{text.strip()}"
+    with _cache_lock:
+        if inflight_key in _inflight:
+            logger.info(f"并发重复已忽略: {inflight_key}")
+            return
+        _inflight.add(inflight_key)
     try:
         from agents import main_agent
         
@@ -284,6 +316,9 @@ def handle_user_message(chat_id, text):
     except Exception as e:
         logger.error(f"处理消息异常: {e}")
         feishu_service.send_message(chat_id, "text", {"text": f"系统发生错误: {str(e)}"})
+    finally:
+        with _cache_lock:
+            _inflight.discard(inflight_key)
 
 @app.route("/webhook/event", methods=["POST"])
 def feishu_event_handler():
@@ -323,6 +358,11 @@ def feishu_event_handler():
         # 过滤掉空消息或非文本消息
         if not text:
             return jsonify({"code": 0})
+        
+        # 二级去重：相同 chat_id + 文本在窗口内不重复处理
+        if _is_duplicate_content(chat_id, text):
+            logger.info(f"重复内容已忽略: chat_id={chat_id}")
+            return jsonify({"code": 0})
             
         # 启动异步线程处理，主线程立即返回 200，避免飞书重试
         threading.Thread(target=handle_user_message, args=(chat_id, text)).start()
@@ -331,6 +371,7 @@ def feishu_event_handler():
 
 import subprocess
 import time
+import argparse
 
 class WeComService:
     def __init__(self):
@@ -612,6 +653,14 @@ def _wecom_decrypt(encoding_aes_key: str, encrypt: str) -> Tuple[str, str]:
     return msg.decode("utf-8"), receive_id
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--llm-backend", choices=["deepseek", "ollama"], default=os.getenv("LLM_BACKEND", "deepseek"))
+    parser.add_argument("--ollama-model", default=os.getenv("OLLAMA_MODEL", "qwen3-vl:8b"))
+    parser.add_argument("--ollama-base-url", default=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"))
+    args, _ = parser.parse_known_args()
+    os.environ["LLM_BACKEND"] = args.llm_backend
+    os.environ["OLLAMA_MODEL"] = args.ollama_model
+    os.environ["OLLAMA_BASE_URL"] = args.ollama_base_url
     # macOS 上 5000 端口常被 AirPlay 占用，改用 8080 端口更安全
     port = int(os.environ.get("PORT", 8080))
     

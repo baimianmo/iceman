@@ -1,7 +1,17 @@
 import sys
+import os
+import argparse
 from agents import main_agent
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--llm-backend", choices=["deepseek", "ollama"], default=os.getenv("LLM_BACKEND", "deepseek"))
+    parser.add_argument("--ollama-model", default=os.getenv("OLLAMA_MODEL", "qwen3-vl:8b"))
+    parser.add_argument("--ollama-base-url", default=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"))
+    args, _ = parser.parse_known_args()
+    os.environ["LLM_BACKEND"] = args.llm_backend
+    os.environ["OLLAMA_MODEL"] = args.ollama_model
+    os.environ["OLLAMA_BASE_URL"] = args.ollama_base_url
     print("Welcome to IceMan Customer Care System (CLI Version)")
     print("---------------------------------------------------")
     print("支持的指令示例：")

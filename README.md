@@ -8,7 +8,8 @@
 - 根据用户输入提取客户姓名（识别“张先生/张女士”等称呼），查询或生成该客户的私行画像（模拟）。
 - 基于画像与意图生成合适的祝福文案，并用 Pillow 生成贺卡图片。
 - 将“客户画像（JSON 卡片）”与“贺卡图片（卡片）”发送至当前飞书对话。
-- 支持本地调试与 CLI 自验证，DeepSeek 接口可选（未配置则自动回退为 Mock 文案）。
+- 支持本地调试与 CLI 自验证；模型后端可选 DeepSeek 或本地 Ollama（未配置时自动回退 Mock）。
+- 技能系统可扩展：支持 skills.md 注册表（大模型可读）、按需加载、以及通过 manifest 在线安装外部技能；兼容 HTTP 类型技能描述。
 
 交互效果（默认顺序）：
 1) 先发送“👤 客户画像数据”（JSON 代码块卡片）；
@@ -31,10 +32,17 @@
      export FEISHU_APP_SECRET="xxxxxxxxxxxxxxxxxxxxxxxxxxxx"
      # 可选：DeepSeek，如不设置则自动使用 Mock
      # export DEEPSEEK_API_KEY="sk-xxxxxxxxxxxxxxxxxxxxxxxx"
+     # 可选：切换到本地 Ollama
+     # export LLM_BACKEND=ollama
+     # export OLLAMA_MODEL="qwen3-vl:8b"
+     # export OLLAMA_BASE_URL="http://localhost:11434"
      ```
   2) 启动 Flask 服务（默认端口 8080，避开 macOS AirPlay 占用的 5000）：
      ```bash
+     # 使用 DeepSeek（默认）
      python3 feishu_server.py
+     # 或使用本地 Ollama（推荐提前 ollama pull qwen3-vl:8b）
+     python3 feishu_server.py --llm-backend ollama --ollama-model qwen3-vl:8b --ollama-base-url http://localhost:11434
      ```
   3) 开启内网穿透（无需注册）：
      ```bash
@@ -62,7 +70,10 @@
 
 - 本地快速验证（不依赖飞书）：
   ```bash
+  # DeepSeek（默认）
   python3 -c "from agents import main_agent; r = main_agent.run_and_return('王先生的儿子考上了清华大学'); import json; print(json.dumps(r, ensure_ascii=False, indent=2))"
+  # 使用本地 Ollama
+  python3 main.py --llm-backend ollama --ollama-model qwen3-vl:8b
   ```
   该命令会打印结构化结果并在 `output_cards/` 生成图片文件。
 
@@ -95,7 +106,7 @@
   - Faker（私行客户画像模拟）
 - Node.js（可选，用于内网穿透）
   - localtunnel（`npm i -g localtunnel`）
-- 可选：DeepSeek（或兼容 OpenAI 接口的模型），通过 `DEEPSEEK_API_KEY` 启用；未设置将使用 Mock。
+- 可选：DeepSeek（`DEEPSEEK_API_KEY`）或本地 Ollama（`OLLAMA_MODEL`、`OLLAMA_BASE_URL`）；未设置将使用 Mock。
 - 企业微信接口：需要 `WECOM_CORP_ID`、`WECOM_CORP_SECRET`、`WECOM_AGENT_ID`
   - 安全模式（推荐）：`WECOM_TOKEN`、`WECOM_ENCODING_AES_KEY`（43 位）
   - 依赖：`pycryptodome`（AES-CBC 解密）
@@ -141,12 +152,46 @@ lt --port 8080
 iceman/
 ├─ feishu_server.py       # 飞书 Webhook 服务（异步处理、幂等、卡片/图片发送）
 ├─ agents.py              # MainAgent + 子 Agent（生日/节日/喜事），结构化返回
-├─ skills.py              # 画像查询与贺卡图片生成（Pillow）
+├─ skills/                # 技能系统（内置 + 外部扩展）
+│  ├─ __init__.py         # 导出 skills 单例（SkillManager）
+│  ├─ manager.py          # 技能注册/调用，skills.md 注册表、外部技能安装、按需加载、HTTP 技能
+│  ├─ builtin/            # 内置技能
+│  │  ├─ profile.py       # 客户画像查询
+│  │  └─ card.py          # 贺卡图片生成
+│  └─ external/           # 外部下载的技能目录
 ├─ profile_service.py     # Faker 模拟私行客户画像（称呼 → 性别一致）
-├─ llm_client.py          # LLM 客户端（DeepSeek，未配置则 Mock）
+├─ llm_client.py          # LLM 客户端（DeepSeek / 本地 Ollama；未配置则 Mock）
 ├─ output_cards/          # 自动生成的贺卡图片输出目录
 └─ README.md
 ```
+
+## Skills 扩展与下载
+
+- 调用统一入口：
+  - 在代码中使用：`from skills import skills`
+  - 内置能力：
+    - `skills.query_profile(name)`
+    - `skills.generate_card(content, theme)`
+- skills.md 注册表（启动时解析，大模型可读）
+  - 在项目根目录的 `skills.md` 中以 ```skill 包裹 JSON 描述技能（便于大模型识别与按需加载）：
+    - 字段：`name`、`description`、`entry`（模块:类名）、`methods`、`parameters`（JSON Schema/子集）、`returns`、`auto_load`
+    - 也支持 HTTP 技能：`type:http`、`endpoint`、`method`、`headers`（支持 `${ENV}` 展开）、`timeout`
+  - 调用时若技能未加载且在注册表中，将即时安装/加载（无预编排）。
+- 安装外部技能（兼容 manifest）：
+  - manifest 示例（JSON）：
+    ```json
+    {
+      "name": "example_skill",
+      "module_url": "https://your.cdn.com/example_skill.py",
+      "module_file": "skill.py"
+    }
+    ```
+  - 运行时安装：
+    ```python
+    from skills import skills
+    skills.install_from_manifest("https://your.cdn.com/example_skill_manifest.json")
+    ```
+  - 安装后会加载至 `skills/external/<name>/` 并自动导入。如果模块提供 `register(manager)` 方法，会在加载时调用；或者包含 `Skill` 类将作为 `<name>` 注册。
 
 ### 常见问题
 

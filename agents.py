@@ -19,7 +19,7 @@ class BirthdayAgent(SubAgent):
         super().__init__("BirthdayAgent")
 
     def process(self, profile, extra_info):
-        self.log(f"接收到生日关怀任务: {profile['name']}")
+        self.log(f"接收到生日关怀任务: {profile.get('name', '客户')}")
         
         # 构建 Prompt
         system_prompt = """你是一个专业的私人银行客户关怀专家。
@@ -39,7 +39,7 @@ class HolidayAgent(SubAgent):
         super().__init__("HolidayAgent")
 
     def process(self, profile, extra_info):
-        self.log(f"接收到节日关怀任务: {profile['name']}")
+        self.log(f"接收到节日关怀任务: {profile.get('name', '客户')}")
         
         system_prompt = """你是一个专业的私人银行客户关怀专家。
 请根据客户画像生成一段节日祝福。
@@ -57,16 +57,20 @@ class CelebrationAgent(SubAgent):
         super().__init__("CelebrationAgent")
 
     def process(self, profile, extra_info):
-        self.log(f"接收到喜事庆祝任务: {profile['name']}")
+        self.log(f"接收到喜事庆祝任务: {profile.get('name', '客户')}")
         
         system_prompt = """你是一个专业的私人银行客户关怀专家。
 请根据客户画像生成一段庆祝文案（如升职、乔迁、获奖等）。
+不得出现任何生日或节日相关词语，如“生日”“生辰”“生日快乐”“happy birthday”“新年快乐”等，除非用户明确提及。
 风格要求：热烈而不失稳重，赞美客户的成就。
-字数控制在 100 字以内。"""
+字数控制在 100 字以内，只输出正文，不要标题或标签。"""
         
         user_prompt = f"客户画像: {json.dumps(profile, ensure_ascii=False)}\n庆祝事件: {extra_info}"
         
-        content = llm_client.chat_completion(system_prompt, user_prompt)
+        content = llm_client.chat_completion(system_prompt, user_prompt, temperature=0.4)
+        if contains_birthday_terms(content):
+            sys2 = system_prompt + " 严禁出现生日相关词语。请修正为纯庆祝文案。"
+            content = llm_client.chat_completion(sys2, user_prompt, temperature=0.2)
         self.log(f"生成的文案: {content}")
         return content
 
@@ -122,7 +126,8 @@ class MainAgent(BaseAgent):
                 pass
         # 补充规则：匹配 “张先生/李女士” 这类称呼
         if not name:
-            m = re.search(r'([\u4e00-\u9fa5]{1,4})(先生|女士)', user_instruction)
+            honorifics = "先生|女士|学长|老师|博士|教授|院士|部长|校长|团长|书记|主任|院长|局长|处长|科长|经理|总|董事长|馆长|所长|队长|班长|厂长|董事|监事|主任委员|委员长"
+            m = re.search(rf'([\u4e00-\u9fa5]{{1,4}})({honorifics})', user_instruction)
             if m:
                 name = m.group(0)
         
@@ -153,8 +158,8 @@ class MainAgent(BaseAgent):
             agent_name = "celebration"
             blessing_text = self.agents["celebration"].process(profile_for_agent, extra_info)
         else:
-            # 默认用生日 Agent 兜底
-            blessing_text = self.agents["birthday"].process(profile_for_agent, extra_info)
+            agent_name = "celebration"
+            blessing_text = self.agents["celebration"].process(profile_for_agent, extra_info)
             
         # 5. 执行 Skill (生成贺卡)
         card_path = None
@@ -201,7 +206,15 @@ class MainAgent(BaseAgent):
             return "生日关怀"
         elif "节日" in user_instruction or "中秋" in user_instruction or "春节" in user_instruction:
             return "节日关怀"
-        elif "庆祝" in user_instruction or "喜" in user_instruction or "考上" in user_instruction:
+        elif ("庆祝" in user_instruction or "喜" in user_instruction or "考上" in user_instruction
+              or "获奖" in user_instruction or "荣获" in user_instruction or "获得" in user_instruction
+              or "立项" in user_instruction or "中标" in user_instruction or "入选" in user_instruction
+              or "晋升" in user_instruction or "升职" in user_instruction or "录取" in user_instruction
+              or "通过" in user_instruction
+              or "购车" in user_instruction or "新车" in user_instruction or "买车" in user_instruction
+              or "提车" in user_instruction or "豪车" in user_instruction or "交车" in user_instruction
+              or "奖章" in user_instruction or "勋章" in user_instruction or "授勋" in user_instruction
+              or "表彰" in user_instruction or "嘉奖" in user_instruction):
             return "喜事庆祝"
         elif "画像" in user_instruction or "查询" in user_instruction:
             return "客户画像查询"
@@ -222,3 +235,12 @@ agents = {
 }
 skills_instance = skills  # 复用导入的 skills 单例
 main_agent = MainAgent(agents, skills_instance)
+
+def contains_birthday_terms(text: str) -> bool:
+    if not text:
+        return False
+    terms = ["生日", "生辰", "生日快乐", "happy birthday", "HBD"]
+    for t in terms:
+        if t.lower() in text.lower():
+            return True
+    return False
