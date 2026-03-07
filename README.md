@@ -216,3 +216,42 @@ iceman/
 - “重复回复”：已加入三层防重（message_id / chat_id+文本窗口 / in-flight 并发）；如仍出现，请提供日志与时间戳。
 - “DeepSeek 输出出现‘生日快乐’但场景并非生日”：庆祝 Agent 的提示词已明确禁用生日词汇，并有二次校正；如仍偶发可进一步收紧（例如模板化输出）。
 - “本地模型超时”：增大 `OLLAMA_TIMEOUT`、`OLLAMA_CLI_TIMEOUT`；首次加载模型建议提高到 300–600 秒；严格本地模式可设 `OLLAMA_STRICT_LOCAL=true`。
+
+## 常见错误清单
+
+- 飞书
+  - 回调验证失败或反复报错：首次配置需处理 `url_verification`，服务器应回显 `challenge`；确保事件订阅 URL 指向 `/webhook/event`。
+  - 消息未送达或 code=99991663：`tenant_access_token` 过期，代码已自动刷新；若仍失败，检查 FEISHU_APP_ID/FEISHU_APP_SECRET。
+  - 图片上传失败 code≠0：确认文件存在、使用 `image/png`，并确保 token 有效。
+  - 重复回复：飞书可能重试推送；已实现 message_id 去重 + 文本窗口去重 + in-flight 防抖。如仍出现，核对日志中的 `message_id`。
+  - 接收者 ID 类型不匹配：已自动识别 `chat_id/open_id/union_id/email`；若跨应用 open_id 无法发送，改用 chat_id。
+
+- 内网穿透
+  - `lt: command not found`：执行 `npm i -g localtunnel`；或使用其他穿透工具。
+  - 端口占用（5000）：默认改用 8080；如冲突，修改 `PORT` 环境变量或命令行。
+
+- 企业微信
+  - 415 Unsupported Media Type：回调需支持 XML；已实现自动 XML/JSON 分支。
+  - 41002 缺少 corpid：检查 `WECOM_CORP_ID/WECOM_CORP_SECRET/WECOM_AGENT_ID` 环境变量是否在进程内生效。
+  - 60020 IP 未在白名单：在企业微信管理后台添加服务器出口 IP。
+  - URL 验证签名失败：核对 `WECOM_TOKEN`；安全模式需使用 token+timestamp+nonce+Encrypt 计算签名。
+  - 解密失败：`WECOM_ENCODING_AES_KEY` 必须为 43 字符；确认 corp_id 与解密出的 receive_id 一致。
+
+- 本地 Ollama
+  - `/api/chat` 404/405：代码已自动回退 `/api/generate`；确认使用 POST 而非 GET。
+  - HTTP 超时：提高 `OLLAMA_TIMEOUT` 和 `OLLAMA_RETRIES`；机器首次加载模型较慢时更明显。
+  - CLI 超时：提高 `OLLAMA_CLI_TIMEOUT` 至 300–600 秒；首次量化/拉取建议更长。
+  - 严格本地模式抛错：`OLLAMA_STRICT_LOCAL=true` 时不回退 Mock；确保模型已 `ollama pull` 且本地服务可用。
+
+- DeepSeek
+  - 未设置 `DEEPSEEK_API_KEY`：将降级为 Mock 模式；设置后恢复真实调用。
+
+- 生成内容准确性
+  - 庆祝类误出现生日词：系统提示已禁止生日/节日词汇并自动二次校正；如仍偶发，可将温度降低或启用模板化输出。
+
+- 运行环境
+  - macOS 出现 `NotOpenSSLWarning`：与 LibreSSL 版本相关，通常不影响功能，可忽略或升级系统 OpenSSL。
+
+- 其它
+  - `NameError: app not defined`：初始化顺序问题已修复，如遇自定义改动，确保 Flask app 初始化在路由前。
+  - 图片路径不存在：确认贺卡生成目录 `output_cards/` 可写且未被清理。
