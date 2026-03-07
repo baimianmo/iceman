@@ -210,6 +210,57 @@ iceman/
     ```
   - 安装后会加载至 `skills/external/<name>/` 并自动导入。如果模块提供 `register(manager)` 方法，会在加载时调用；或者包含 `Skill` 类将作为 `<name>` 注册。
 
+### 外部技能示例与最佳实践
+
+- 通过环境变量按需安装
+  - 单技能定向：
+    - export SKILL_SUMMARIZE_MANIFEST_URL="https://example.com/manifest/summarize.json"
+    - 使用：`skills.call("summarize", "run", text="...")`
+  - 多技能映射：
+    - export SKILLS_MANIFESTS='{"summarize":"https://example.com/manifest/summarize.json","qa":"https://example.com/manifest/qa.json"}'
+  - 索引式：
+    - export SKILLS_INDEX_URL="https://example.com/manifest"（调用 `skills.call("qa", ...)` 时自动拉取 `.../qa.json`）
+
+- HTTP 技能 manifest 范例
+  ```json
+  {
+    "name": "summarize",
+    "type": "http",
+    "method": "POST",
+    "endpoint": { "run": "https://api.example.com/summarize" },
+    "headers": { "Authorization": "Bearer ${API_TOKEN}", "Content-Type": "application/json" },
+    "timeout": 10
+  }
+  ```
+  - 支持 `${ENV}` 变量展开；`endpoint` 可为对象（不同方法不同 URL）。
+
+- Python 技能 manifest 与代码约定
+  - manifest：
+    ```json
+    {
+      "name": "my_tool",
+      "entry": "skills.external.my_tool:Skill"
+    }
+    ```
+  - 代码（skills/external/my_tool/skill.py）需提供 `register(manager)` 或 `Skill` 类：
+    ```python
+    class Skill:
+      def run(self, text: str) -> str:
+        return text[:120]
+    def register(manager): manager.register("my_tool", Skill())
+    ```
+
+- 缺失技能自动生成
+  - 当调用某技能不存在且无法解析到 manifest 时，系统会在 `skills/external/autogen_<name>/` 自动生成 Python 技能骨架，并以原名注册。默认使用大模型处理；无模型时降级为安全的文本规则。
+
+- 最佳实践
+  - 接口稳定：为每个技能定义清晰、少量的方法；返回值保持简单（标量或 JSON）。
+  - 超时与重试：HTTP 技能在 manifest 中设置合理 `timeout`；在调用方做好异常处理。
+  - 配置分离：敏感信息通过 `${ENV}` 注入，不在仓库中硬编码。
+  - 幂等与日志：方法应幂等；仅记录必要字段，不落地敏感数据。
+  - 测试优先：为关键技能提供最小单测（见 tests/test_skills_manager_external.py / _autogen.py）。
+  - 版本化：为外部技能提供明确版本路径或清单文件，便于回滚。
+
 ### 常见问题
 
 - “没有响应”：确认 localtunnel 正在运行、飞书事件订阅地址指向 `/webhook/event` 且验证通过；确认应用已加入当前会话并发布了权限变更；群聊中请 @ 应用。
