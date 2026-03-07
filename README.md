@@ -30,12 +30,20 @@
      ```bash
      export FEISHU_APP_ID="cli_xxxxxxxxxx"
      export FEISHU_APP_SECRET="xxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+     # 可选：飞书事件二级去重窗口（秒），默认 45
+     export FEISHU_DEDUP_SECONDS=60
      # 可选：DeepSeek，如不设置则自动使用 Mock
      # export DEEPSEEK_API_KEY="sk-xxxxxxxxxxxxxxxxxxxxxxxx"
      # 可选：切换到本地 Ollama
      # export LLM_BACKEND=ollama
      # export OLLAMA_MODEL="qwen3-vl:8b"
      # export OLLAMA_BASE_URL="http://localhost:11434"
+     # 本地超时与重试（可根据机器性能调整）
+     # export OLLAMA_TIMEOUT=60          # HTTP 超时（秒）
+     # export OLLAMA_RETRIES=1           # HTTP 重试次数
+     # export OLLAMA_CLI_TIMEOUT=300     # CLI 兜底超时（秒）
+     # 仅本地严格模式（失败不回退 Mock；用于生产或验收）
+     # export OLLAMA_STRICT_LOCAL=true
      ```
   2) 启动 Flask 服务（默认端口 8080，避开 macOS AirPlay 占用的 5000）：
      ```bash
@@ -87,14 +95,23 @@
     - 从文本中提取姓名（支持“张先生/张女士”）；
     - 调用 Skill 查询/生成客户画像（Faker 模拟、性别随称呼一致）；
     - 调用子 Agent（Birthday/Holiday/Celebration）基于画像生成文案；
+      - 庆祝 Agent 的提示词明确“禁止生日/节日词汇”，避免误生成“生日快乐”等不相关内容；
+      - 如果输出仍包含生日相关词，将自动二次约束重写，保证准确性；
     - 使用 Pillow 生成贺卡图片；
     - 返回结构化结果：`{ profile, blessing, image_path, text }`。
   - 飞书发送层：
     - 先发送“客户画像 JSON 卡片”；
     - 再上传图片并发送“图片卡片”。
 
-- 幂等与重试处理
-  - 在 Webhook 处理函数中加入 `message_id` 去重缓存（定长窗口），忽略飞书可能的重复推送；
+- 幂等、并发与重试处理
+  - 去重层次：
+    1) `message_id` 去重（避免飞书重试带来重复事件）；
+    2) `chat_id + 文本` 在时间窗口内的二级去重（避免不同 message_id 的相同内容重复处理，可调 `FEISHU_DEDUP_SECONDS`）；
+    3) in-flight 并发去重（同一 `chat_id+文本` 同时只允许一个线程处理）；
+  - LLM 调用容错（本地优先）：
+    - Ollama：优先 `/api/chat`，遇 404/405 → `/api/generate`，HTTP 均失败 → CLI 兜底；
+    - 可配置 `OLLAMA_TIMEOUT`、`OLLAMA_RETRIES`、`OLLAMA_CLI_TIMEOUT`；
+    - `OLLAMA_STRICT_LOCAL=true` 时，所有本地路径失败将抛错，不回退 Mock；
   - 过滤非用户消息（避免机器人自发消息回环）。
 
 ## 4. 依赖组件
@@ -106,7 +123,7 @@
   - Faker（私行客户画像模拟）
 - Node.js（可选，用于内网穿透）
   - localtunnel（`npm i -g localtunnel`）
-- 可选：DeepSeek（`DEEPSEEK_API_KEY`）或本地 Ollama（`OLLAMA_MODEL`、`OLLAMA_BASE_URL`）；未设置将使用 Mock。
+- 可选：DeepSeek（`DEEPSEEK_API_KEY`）或本地 Ollama（`OLLAMA_MODEL`、`OLLAMA_BASE_URL`）；未设置将使用 Mock。支持严格本地模式（`OLLAMA_STRICT_LOCAL=true`）。
 - 企业微信接口：需要 `WECOM_CORP_ID`、`WECOM_CORP_SECRET`、`WECOM_AGENT_ID`
   - 安全模式（推荐）：`WECOM_TOKEN`、`WECOM_ENCODING_AES_KEY`（43 位）
   - 依赖：`pycryptodome`（AES-CBC 解密）
@@ -196,4 +213,6 @@ iceman/
 ### 常见问题
 
 - “没有响应”：确认 localtunnel 正在运行、飞书事件订阅地址指向 `/webhook/event` 且验证通过；确认应用已加入当前会话并发布了权限变更；群聊中请 @ 应用。
-- “重复回复”：代码已加入 message_id 去重；如仍出现，请截图日志中的 `message_id` 并反馈。
+- “重复回复”：已加入三层防重（message_id / chat_id+文本窗口 / in-flight 并发）；如仍出现，请提供日志与时间戳。
+- “DeepSeek 输出出现‘生日快乐’但场景并非生日”：庆祝 Agent 的提示词已明确禁用生日词汇，并有二次校正；如仍偶发可进一步收紧（例如模板化输出）。
+- “本地模型超时”：增大 `OLLAMA_TIMEOUT`、`OLLAMA_CLI_TIMEOUT`；首次加载模型建议提高到 300–600 秒；严格本地模式可设 `OLLAMA_STRICT_LOCAL=true`。
