@@ -9,6 +9,15 @@ class TestSkillsManagerExternal(unittest.TestCase):
         for k in ["SKILLS_MANIFESTS", "SKILLS_INDEX_URL", "SKILL_SUMMARIZE_MANIFEST_URL"]:
             if k in os.environ:
                 del os.environ[k]
+        # 清理可能由其他测试自动生成并注册的 summarize 技能
+        try:
+            from skills import skills
+            if "summarize" in getattr(skills, "_skills", {}):
+                skills._skills.pop("summarize", None)
+            if "summarize" in getattr(skills, "_registry", {}):
+                skills._registry.pop("summarize", None)
+        except Exception:
+            pass
 
     @patch("requests.post")
     @patch("requests.get")

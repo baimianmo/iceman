@@ -158,8 +158,28 @@ class MainAgent(BaseAgent):
             agent_name = "celebration"
             blessing_text = self.agents["celebration"].process(profile_for_agent, extra_info)
         else:
-            agent_name = "celebration"
-            blessing_text = self.agents["celebration"].process(profile_for_agent, extra_info)
+            # 其他场景：优先尝试外部技能映射（不预取，按需安装）
+            external_map = {
+                "翻译": "translate",
+                "摘要": "summarize",
+                "总结": "summarize",
+                "语法纠错": "proofread",
+            }
+            mapped = None
+            for kw, sk in external_map.items():
+                if kw in user_instruction:
+                    mapped = sk
+                    break
+            if mapped:
+                try:
+                    agent_name = "external"
+                    blessing_text = self.skills.call(mapped, "run", text=user_instruction)
+                except Exception:
+                    blessing_text = ""
+            # 如果外部映射未命中或失败，则兜底使用庆祝 Agent（稳妥输出）
+            if not blessing_text:
+                agent_name = "celebration"
+                blessing_text = self.agents["celebration"].process(profile_for_agent, extra_info)
             
         # 5. 执行 Skill (生成贺卡)
         card_path = None

@@ -31,7 +31,8 @@ class SkillManager:
         # 按需加载：若未加载但在注册表中，尝试即时加载
         if not s and skill in self._registry:
             meta = self._registry.get(skill, {})
-            manifest_url = meta.get("manifest_url")
+            # 若注册表未提供 manifest_url，则尝试用环境变量解析（支持覆盖/补充）
+            manifest_url = meta.get("manifest_url") or self._resolve_manifest_url(skill)
             entry = meta.get("entry")
             stype = meta.get("type") or "python"
             if manifest_url:
@@ -39,6 +40,9 @@ class SkillManager:
                     self.install_from_manifest(manifest_url)
                 except Exception as e:
                     print(f"[SkillManager] lazy install failed: {manifest_url}: {e}")
+                # 安装后更新元数据
+                meta = self._registry.get(skill, meta)
+                stype = meta.get("type") or stype
             if entry and not self.get(skill):
                 try:
                     mod_path, cls_name = entry.split(":")
@@ -49,7 +53,8 @@ class SkillManager:
                 except Exception as e:
                     print(f"[SkillManager] lazy load entry failed: {entry}: {e}")
             s = self.get(skill)
-            if not s and stype == "http":
+            # http 类型直接走 http 分支
+            if not s and (stype == "http" or (meta.get("type") == "http")):
                 return self._call_http(meta, func, *args, **kwargs)
         # 若注册表也无记录，启用环境变量解析器按需安装
         if not s and skill not in self._registry:
@@ -248,7 +253,7 @@ class SkillManager:
         从环境变量解析技能的 manifest URL：
           1) SKILL_<NAME>_MANIFEST_URL（优先，NAME 为大写）
           2) SKILLS_MANIFESTS（JSON，{ name: url }）
-          3) SKILLS_INDEX_URL 基于约定的 <index>/<name>.json
+          3) SKILLS_INDEX_URL 基于约定的 <index>/<name>.json，可逗号分隔多个索引
         """
         # 1) per-skill env
         env_key = f"SKILL_{skill_name.upper()}_MANIFEST_URL"
@@ -267,8 +272,13 @@ class SkillManager:
         # 3) index url
         idx = os.getenv("SKILLS_INDEX_URL")
         if idx:
-            idx = idx.rstrip("/")
-            return f"{idx}/{skill_name}.json"
+            # 支持以逗号分隔多个索引地址，依次尝试，返回第一个拼接结果
+            for raw in idx.split(","):
+                raw = raw.strip()
+                if not raw:
+                    continue
+                base = raw.rstrip("/")
+                return f"{base}/{skill_name}.json"
         return None
 
     def _autogen_python_skill(self, skill_name: str, method_name: str):
