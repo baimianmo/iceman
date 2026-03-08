@@ -142,6 +142,28 @@ class FeishuService:
             logger.error(f"上传图片异常: {e}")
             return None
 
+    def upload_file(self, file_path, file_type="pdf"):
+        if not self.tenant_access_token:
+            self.get_tenant_access_token()
+        url = "https://open.feishu.cn/open-apis/im/v1/files"
+        headers = {"Authorization": f"Bearer {self.tenant_access_token}"}
+        try:
+            if not os.path.exists(file_path):
+                logger.error(f"文件不存在: {file_path}")
+                return None
+            filename = os.path.basename(file_path)
+            files = {"file": (filename, open(file_path, "rb"), "application/pdf")}
+            data = {"file_type": file_type}
+            resp = requests.post(url, headers=headers, files=files, data=data).json()
+            if resp.get("code") == 0:
+                return resp.get("data", {}).get("file_key")
+            else:
+                logger.error(f"上传文件失败: {resp}")
+                return None
+        except Exception as e:
+            logger.error(f"上传文件异常: {e}")
+            return None
+
     def send_interactive_card(self, chat_id, title, content_list):
         """发送通用富文本卡片"""
         if not self.tenant_access_token:
@@ -284,6 +306,7 @@ def handle_user_message(chat_id, text):
             profile_data = result.get("profile")
             blessing_text = result.get("blessing", "")
             image_path = result.get("image_path")
+            pdf_path = result.get("pdf_path")
             
             # 1. 发送客户画像 (如果有)
             if profile_data:
@@ -310,6 +333,12 @@ def handle_user_message(chat_id, text):
                     )
                 else:
                     feishu_service.send_message(chat_id, "text", {"text": "[图片生成失败]"})
+            
+            # 4. 如有 PDF，发送文件
+            if pdf_path and os.path.exists(pdf_path):
+                file_key = feishu_service.upload_file(pdf_path, "pdf")
+                if file_key:
+                    feishu_service.send_message(chat_id, "file", {"file_key": file_key})
         else:
             feishu_service.send_message(chat_id, "text", {"text": "抱歉，我没有理解您的指令。"})
             

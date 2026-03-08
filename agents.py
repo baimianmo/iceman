@@ -174,6 +174,13 @@ class MainAgent(BaseAgent):
             print(f"[MainAgent] 调度 Skill: 生成贺卡")
             card_path = self.skills.generate_card(clean_content, theme)
 
+        pdf_path = None
+        if card_path and any(k in user_instruction.lower() for k in ["pdf", "导出pdf", "输出pdf"]):
+            try:
+                pdf_path = self.skills.call("pdf", "generate_pdf", card_path)
+            except Exception:
+                pdf_path = None
+
         # 6. 构造返回
         # 如果有画像，text 优先展示画像，然后是祝福语
         final_text = ""
@@ -185,6 +192,7 @@ class MainAgent(BaseAgent):
         return {
             "text": final_text, 
             "image_path": card_path,
+            "pdf_path": pdf_path,
             "profile": profile_data,
             "blessing": blessing_text
         }
