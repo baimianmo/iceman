@@ -97,6 +97,27 @@ class SkillManager:
             raise RuntimeError(f"skill method not found: {skill}.{func}")
         return fn(*args, **kwargs)
 
+    def get_skill_descriptions(self):
+        """
+        获取所有可用技能的描述列表，用于 Prompt 构建。
+        """
+        descs = []
+        # 优先使用 registry 中的元数据
+        for name, meta in self._registry.items():
+            desc = meta.get("description", "")
+            descs.append(f"- {name}: {desc}")
+        
+        # 对于不在 registry 中的已加载 skill (如手动添加或自动生成的)
+        for name, impl in self._skills.items():
+            if name not in self._registry:
+                # 尝试获取 docstring 或 description 属性
+                desc = getattr(impl, "description", None) or (impl.__doc__ or "").strip().split("\n")[0]
+                if not desc:
+                    desc = f"外部加载技能 {name}"
+                descs.append(f"- {name}: {desc}")
+        
+        return "\n".join(descs)
+
     def query_profile(self, name=None):
         return self.call("profile", "query_profile", name)
 

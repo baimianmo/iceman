@@ -220,10 +220,16 @@ class MainAgent(BaseAgent):
     def _identify_intent(self, user_instruction):
         """识别用户意图 (简单规则匹配，实际可用 LLM)"""
         # 复用之前的逻辑
+        # 动态获取技能描述，供 LLM 参考
+        skills_desc = self.skills.get_skill_descriptions()
+        
         prompt = f"""
         请分析以下用户指令的意图，返回最匹配的一个类别：
         指令：{user_instruction}
         类别选项：[生日关怀, 节日关怀, 喜事庆祝, 客户画像查询, 其他]
+        当前可用技能：
+{skills_desc}
+        如果指令明显对应某个技能（如“翻译”->translate），请优先返回“其他”。
         只返回类别名称，不要其他废话。
         """
         # 这里为了简单，我们用规则匹配代替调用 LLM，因为 LLM 比较慢
