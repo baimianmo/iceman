@@ -34,6 +34,10 @@
      export FEISHU_DEDUP_SECONDS=60
      # 可选：DeepSeek，如不设置则自动使用 Mock
      # export DEEPSEEK_API_KEY="sk-xxxxxxxxxxxxxxxxxxxxxxxx"
+     # 可选：ZhipuAI GLM (免费模型 glm-4-flash)
+     # export LLM_BACKEND=glm
+     # export GLM_API_KEY="your_zhipu_api_key"
+     # export GLM_MODEL="glm-4-flash"
      # 可选：切换到本地 Ollama
      # export LLM_BACKEND=ollama
      # export OLLAMA_MODEL="qwen3-vl:8b"
@@ -49,6 +53,8 @@
      ```bash
      # 使用 DeepSeek（默认）
      python3 feishu_server.py
+     # 使用 ZhipuAI GLM
+     python3 feishu_server.py --llm-backend glm --glm-api-key "your_key"
      # 或使用本地 Ollama（推荐提前 ollama pull qwen3-vl:8b）
      python3 feishu_server.py --llm-backend ollama --ollama-model qwen3-vl:8b --ollama-base-url http://localhost:11434
      ```
@@ -108,9 +114,11 @@
     1) `message_id` 去重（避免飞书重试带来重复事件）；
     2) `chat_id + 文本` 在时间窗口内的二级去重（避免不同 message_id 的相同内容重复处理，可调 `FEISHU_DEDUP_SECONDS`）；
     3) in-flight 并发去重（同一 `chat_id+文本` 同时只允许一个线程处理）；
-  - LLM 调用容错（本地优先）：
-    - Ollama：优先 `/api/chat`，遇 404/405 → `/api/generate`，HTTP 均失败 → CLI 兜底；
-    - 可配置 `OLLAMA_TIMEOUT`、`OLLAMA_RETRIES`、`OLLAMA_CLI_TIMEOUT`；
+115→  - LLM 调用容错（多后端支持）：
+116→    - 优先使用 DeepSeek/GLM API；
+117→    - 失败或未配置时回退到 Ollama 本地模型；
+118→    - Ollama：优先 `/api/chat`，遇 404/405 → `/api/generate`，HTTP 均失败 → CLI 兜底；
+119→    - 可配置 `OLLAMA_TIMEOUT`、`OLLAMA_RETRIES`、`OLLAMA_CLI_TIMEOUT`；
     - `OLLAMA_STRICT_LOCAL=true` 时，所有本地路径失败将抛错，不回退 Mock；
   - 过滤非用户消息（避免机器人自发消息回环）。
 
@@ -123,7 +131,7 @@
   - Faker（私行客户画像模拟）
 - Node.js（可选，用于内网穿透）
   - localtunnel（`npm i -g localtunnel`）
-- 可选：DeepSeek（`DEEPSEEK_API_KEY`）或本地 Ollama（`OLLAMA_MODEL`、`OLLAMA_BASE_URL`）；未设置将使用 Mock。支持严格本地模式（`OLLAMA_STRICT_LOCAL=true`）。
+- 可选：DeepSeek（`DEEPSEEK_API_KEY`）、ZhipuAI GLM（`GLM_API_KEY`，默认 `glm-4-flash`）或本地 Ollama（`OLLAMA_MODEL`、`OLLAMA_BASE_URL`）；未设置将使用 Mock。支持严格本地模式（`OLLAMA_STRICT_LOCAL=true`）。
 - 企业微信接口：需要 `WECOM_CORP_ID`、`WECOM_CORP_SECRET`、`WECOM_AGENT_ID`
   - 安全模式（推荐）：`WECOM_TOKEN`、`WECOM_ENCODING_AES_KEY`（43 位）
   - 依赖：`pycryptodome`（AES-CBC 解密）
@@ -177,8 +185,11 @@ iceman/
 │  │  └─ card.py          # 贺卡图片生成
 │  └─ external/           # 外部下载的技能目录
 ├─ profile_service.py     # Faker 模拟私行客户画像（称呼 → 性别一致）
-├─ llm_client.py          # LLM 客户端（DeepSeek / 本地 Ollama；未配置则 Mock）
+├─ llm_client.py          # LLM 客户端（DeepSeek / GLM / 本地 Ollama；未配置则 Mock）
 ├─ output_cards/          # 自动生成的贺卡图片输出目录
+├─ design.md              # 架构设计文档（含 Mermaid 流程图）
+├─ architecture.pdf       # 架构图 PDF
+├─ addskills.md           # 技能开发指南
 └─ README.md
 ```
 
@@ -260,6 +271,10 @@ iceman/
   - 幂等与日志：方法应幂等；仅记录必要字段，不落地敏感数据。
   - 测试优先：为关键技能提供最小单测（见 tests/test_skills_manager_external.py / _autogen.py）。
   - 版本化：为外部技能提供明确版本路径或清单文件，便于回滚。
+
+### 本地技能开发
+
+关于如何开发、注册和测试本地 Python 技能，请参阅 [技能开发指南](addskills.md)。
 
 ### 常见问题
 

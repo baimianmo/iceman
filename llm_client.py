@@ -6,14 +6,22 @@ from openai import OpenAI
 
 class LLMClient:
     """
-    LLM 客户端，支持 DeepSeek 与本地 Ollama（qwen3-vl:8b 等）。
+    LLM 客户端，支持 DeepSeek、ZhipuAI GLM (默认 glm-4-flash) 与本地 Ollama（qwen3-vl:8b 等）。
     """
     def __init__(self):
-        # 后端选择：deepseek / ollama
+        # 后端选择：deepseek / ollama / glm
         self.backend = os.getenv("LLM_BACKEND", "deepseek").lower()
+        
         # DeepSeek 配置
-        self.api_key = os.getenv("DEEPSEEK_API_KEY") or "sk-your-api-key-here"
-        self.base_url = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
+        self.deepseek_api_key = os.getenv("DEEPSEEK_API_KEY") or "sk-your-api-key-here"
+        self.deepseek_base_url = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
+        self.deepseek_model = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+
+        # GLM (ZhipuAI) 配置
+        self.glm_api_key = os.getenv("GLM_API_KEY") or ""
+        self.glm_base_url = os.getenv("GLM_BASE_URL", "https://open.bigmodel.cn/api/paas/v4/")
+        self.glm_model = os.getenv("GLM_MODEL", "glm-4-flash")
+        
         # Ollama 配置
         self.ollama_base = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
         self.ollama_model = os.getenv("OLLAMA_MODEL", "qwen3-vl:8b")
@@ -22,9 +30,15 @@ class LLMClient:
         self.ollama_strict_local = os.getenv("OLLAMA_STRICT_LOCAL", "false").lower() in ("1", "true", "yes", "on")
         self.ollama_cli_timeout = int(os.getenv("OLLAMA_CLI_TIMEOUT", str(max(self.ollama_timeout * 2, 120))))
 
+        self.client = None
         if self.backend == "deepseek":
-            self.client = OpenAI(api_key=self.api_key, base_url=self.base_url)
-            self.model = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+            self.client = OpenAI(api_key=self.deepseek_api_key, base_url=self.deepseek_base_url)
+            self.model = self.deepseek_model
+        elif self.backend == "glm":
+            if not self.glm_api_key:
+                print("【警告】未检测到 GLM_API_KEY，将无法正常调用 GLM 模型。")
+            self.client = OpenAI(api_key=self.glm_api_key, base_url=self.glm_base_url)
+            self.model = self.glm_model
 
     def chat_completion(self, system_prompt, user_prompt, temperature=0.7):
         """
@@ -99,10 +113,16 @@ class LLMClient:
                     raise RuntimeError("Ollama strict local mode: all fallbacks failed")
                 return self._mock_response(system_prompt, user_prompt)
 
-        # deepseek 默认
-        if self.api_key == "sk-your-api-key-here" and not os.getenv("DEEPSEEK_API_KEY"):
-            print("【警告】未检测到 DEEPSEEK_API_KEY 环境变量，将返回模拟数据。")
-            return self._mock_response(system_prompt, user_prompt)
+        # deepseek / glm
+        if self.backend == "deepseek":
+            if self.deepseek_api_key == "sk-your-api-key-here":
+                print("【警告】未检测到 DEEPSEEK_API_KEY 环境变量，将返回模拟数据。")
+                return self._mock_response(system_prompt, user_prompt)
+        elif self.backend == "glm":
+            if not self.glm_api_key:
+                print("【警告】未检测到 GLM_API_KEY 环境变量，将返回模拟数据。")
+                return self._mock_response(system_prompt, user_prompt)
+
         try:
             response = self.client.chat.completions.create(
                     model=self.model,
@@ -115,7 +135,7 @@ class LLMClient:
                 )
             return response.choices[0].message.content
         except Exception as e:
-            print(f"【LLM 调用失败(deepseek)】: {e}")
+            print(f"【LLM 调用失败({self.backend})】: {e}")
             return self._mock_response(system_prompt, user_prompt)
 
     def _ollama_cli(self, system_prompt, user_prompt, temperature):
